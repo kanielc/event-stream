@@ -3,8 +3,10 @@ package main
 import (
 	"bufio"
 	"context"
+	"flag"
 	"fmt"
 	"log"
+	"math"
 	"net"
 	"strconv"
 	"time"
@@ -63,9 +65,9 @@ func ListTopics(conn *kafka.Conn) ([]string, error) {
 	return res, nil
 }
 
-func PrintOutMessages(topic string) {
+func PrintOutMessages(topic string, kafkaAddr string) {
 	r := kafka.NewReader(kafka.ReaderConfig{
-		Brokers:   []string{"localhost:9092"},
+		Brokers:   []string{kafkaAddr},
 		Topic:     topic,
 		Partition: 0,
 		MinBytes:  10e3, // 10KB
@@ -85,30 +87,34 @@ func PrintOutMessages(topic string) {
 
 func main() {
 	// to produce messages
-	topic := "my-topic"
+	topic := flag.String("t", "my-topic", "Kafka topic to push messages to")
+	kafkaAddr := flag.String("k", "localhost:9092", "Kafka URL to connect to")
+	serviceAddr := flag.String("s", "http://localhost:4056/next", "URL of service to fetch next round of events")
+	frequency := flag.Int("f", 1, "Frequency in seconds to check for new messages")
+	runLength := flag.Int("r", math.MaxInt32, "Total number of seconds the app will run for (at most 1 request after this time).")
 
 	// connection for Kafka
-	conn, err := kafka.Dial("tcp", "localhost:9092")
+	conn, err := kafka.Dial("tcp", *kafkaAddr)
 	if err != nil {
 		log.Fatal("failed to dial leader:", err)
 	}
 	defer conn.Close()
 
 	w := &kafka.Writer{
-		Addr:     kafka.TCP("localhost:9092"),
-		Topic:    topic,
+		Addr:     kafka.TCP(*kafkaAddr),
+		Topic:    *topic,
 		Balancer: &kafka.LeastBytes{},
 	}
 	defer w.Close()
 
-	conn.SetWriteDeadline(time.Now().Add(3 * time.Second))
+	conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 
 	// read messages and just print count for now
 	httpClient := &http.Client{Timeout: time.Second * 10}
 
-	for i := 0; i < 100; i++ {
+	for i := 0; i < *runLength; i += *frequency {
 		startTime := time.Now().UnixNano()
-		resp, err := httpClient.Get("http://localhost:8080/next")
+		resp, err := httpClient.Get(*serviceAddr)
 		if err != nil {
 			panic(err)
 		}
@@ -129,20 +135,12 @@ func main() {
 
 			fmt.Printf("Took %d milliseconds to process %d records\n", (time.Now().UnixNano()-startTime)/1e6, len(messages))
 		}
-		time.Sleep(2 * time.Second)
-	}
 
-	//CreateTopic(conn, topic)
-	/*topics, err := ListTopics(conn)
-	if err != nil {
-		panic(err.Error())
-	}
-	fmt.Println("topics", strings.Join(topics, ", "))
+		runTime := int(time.Now().UnixNano() - startTime)
+		runTimeUpperSeconds := int(math.Ceil(float64(runTime) / float64(1e6)))
 
-	if err := conn.Close(); err != nil {
-		log.Fatal("failed to close writer:", err)
+		if runTimeUpperSeconds < *frequency {
+			time.Sleep(time.Duration(*frequency-runTimeUpperSeconds) * time.Second)
+		}
 	}
-
-	PrintOutMessages(topic)
-	*/
 }

@@ -61,8 +61,6 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	expected := float64(int(time.Now().Unix())-startTime) / runLength * dataSize
 	max := int(math.Min(expected, float64(len(data)-1)))
 
-	log.Printf("Returning %d records, current index %d, moving towards %d with total uptime of %d and service period of %d", max-curPos, curPos, max, (int(time.Now().Unix()) - startTime), int(runLength))
-
 	// handle needing an empty result
 	if curPos == max || max == 0 {
 		fmt.Fprintf(w, "")
@@ -70,14 +68,17 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "%s", strings.Join(data[curPos:max], "\n"))
 	}
 
+	//log.Printf("Returning %d records, current index %d, moving towards %d with total uptime of %d and service period of %d", max-curPos, curPos, max, (int(time.Now().Unix()) - startTime), int(runLength))
+
 	curPos = max
 }
 
 func main() {
 	// load data
 	basePath := flag.String("d", ".", "directory of files to load")
-	filePattern := flag.String("p", "*.json", "pattern of json files to load")
+	filePattern := flag.String("g", "*.json", "glob pattern of json files to load")
 	length := flag.Int("l", 300, "how many seconds data will be served for (at most 1 call after will return results)")
+	port := flag.Int("p", 4056, "What port to listen to HTTP requests on.")
 
 	flag.Parse()
 	runLength = float64(*length)
@@ -86,5 +87,5 @@ func main() {
 
 	http.HandleFunc("/next", handler)
 	startTime = int(time.Now().Unix())
-	http.ListenAndServe(":8080", nil)
+	http.ListenAndServe(fmt.Sprintf(":%d", *port), nil)
 }
