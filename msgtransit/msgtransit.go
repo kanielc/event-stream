@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"log"
 	"math"
-	"net"
-	"strconv"
 	"time"
 
 	"net/http"
@@ -16,72 +14,37 @@ import (
 	"github.com/segmentio/kafka-go"
 )
 
-func CreateTopic(conn *kafka.Conn, topic string) {
-	controller, err := conn.Controller()
-	if err != nil {
-		panic(err.Error())
-	}
-	var controllerConn *kafka.Conn
-	controllerConn, err = kafka.Dial("tcp", net.JoinHostPort(controller.Host, strconv.Itoa(controller.Port)))
-	if err != nil {
-		panic(err.Error())
-	}
-	defer controllerConn.Close()
-
-	topicConfigs := []kafka.TopicConfig{
-		{
-			Topic:             topic,
-			NumPartitions:     1,
-			ReplicationFactor: 1,
-		},
-	}
-
-	err = controllerConn.CreateTopics(topicConfigs...)
-	if err != nil {
-		panic(err.Error())
-	}
-}
-
-func ListTopics(conn *kafka.Conn) ([]string, error) {
-	partitions, err := conn.ReadPartitions()
-
-	if err != nil {
-		return []string{}, err
-	}
-
-	m := map[string]bool{}
-
-	for _, p := range partitions {
-		m[p.Topic] = true
-	}
-
-	res := make([]string, len(m))
-	pos := 0
-	for k := range m {
-		res[pos] = k
-		pos++
-	}
-
-	return res, nil
-}
-
-func PrintOutMessages(topic string, kafkaAddr string) {
-	r := kafka.NewReader(kafka.ReaderConfig{
-		Brokers:   []string{kafkaAddr},
-		Topic:     topic,
-		Partition: 0,
-		MinBytes:  10e3, // 10KB
-		MaxBytes:  10e6, // 10MB
-	})
-	r.SetOffset(0)
-
-	defer r.Close()
-	for {
-		m, err := r.ReadMessage(context.Background())
+func ProcessMessages(serviceAddr string, frequency int, runLength int, httpClient *http.Client, w *kafka.Writer) {
+	for i := 0; i < runLength; i += frequency {
+		startTime := time.Now().UnixNano()
+		resp, err := httpClient.Get(serviceAddr)
 		if err != nil {
-			break
+			panic(err)
 		}
-		fmt.Printf("message at offset %d: %s = %s\n", m.Offset, string(m.Key), string(m.Value))
+		defer resp.Body.Close()
+
+		messages := make([]kafka.Message, 0, 100)
+		scanner := bufio.NewScanner(resp.Body)
+		for scanner.Scan() {
+			messages = append(messages, kafka.Message{Value: []byte(scanner.Text())})
+		}
+
+		if len(messages) > 0 {
+			err = w.WriteMessages(context.Background(), messages...)
+
+			if err != nil {
+				log.Fatal("failed to write messages:", err)
+			}
+
+			fmt.Printf("Took %d milliseconds to process %d records\n", (time.Now().UnixNano()-startTime)/1e6, len(messages))
+		}
+
+		runTime := int(time.Now().UnixNano() - startTime)
+		runTimeUpperSeconds := int(math.Ceil(float64(runTime) / float64(1e6)))
+
+		if runTimeUpperSeconds < frequency {
+			time.Sleep(time.Duration(frequency-runTimeUpperSeconds) * time.Second)
+		}
 	}
 }
 
@@ -112,35 +75,5 @@ func main() {
 	// read messages and just print count for now
 	httpClient := &http.Client{Timeout: time.Second * 10}
 
-	for i := 0; i < *runLength; i += *frequency {
-		startTime := time.Now().UnixNano()
-		resp, err := httpClient.Get(*serviceAddr)
-		if err != nil {
-			panic(err)
-		}
-		defer resp.Body.Close()
-
-		messages := make([]kafka.Message, 0, 100)
-		scanner := bufio.NewScanner(resp.Body)
-		for scanner.Scan() {
-			messages = append(messages, kafka.Message{Value: []byte(scanner.Text())})
-		}
-
-		if len(messages) > 0 {
-			err = w.WriteMessages(context.Background(), messages...)
-
-			if err != nil {
-				log.Fatal("failed to write messages:", err)
-			}
-
-			fmt.Printf("Took %d milliseconds to process %d records\n", (time.Now().UnixNano()-startTime)/1e6, len(messages))
-		}
-
-		runTime := int(time.Now().UnixNano() - startTime)
-		runTimeUpperSeconds := int(math.Ceil(float64(runTime) / float64(1e6)))
-
-		if runTimeUpperSeconds < *frequency {
-			time.Sleep(time.Duration(*frequency-runTimeUpperSeconds) * time.Second)
-		}
-	}
+	ProcessMessages(*serviceAddr, *frequency, *runLength, httpClient, w)
 }
