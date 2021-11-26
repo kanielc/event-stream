@@ -55,6 +55,9 @@ func main() {
 	serviceAddr := flag.String("s", "http://localhost:4056/next", "URL of service to fetch next round of events")
 	frequency := flag.Int("f", 1, "Frequency in seconds to check for new messages")
 	runLength := flag.Int("r", math.MaxInt32, "Total number of seconds the app will run for (at most 1 request after this time).")
+	flag.Parse()
+
+	log.Printf("Writing data to topic: %s\n", *topic)
 
 	// connection for Kafka
 	conn, err := kafka.Dial("tcp", *kafkaAddr)
